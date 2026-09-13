@@ -30,7 +30,7 @@ function providerCoverage(record) {
     unavailableWithoutSuccess: unavailableWithoutSuccess }
 }
 
-function remoteProvider(record, account) {
+function remoteProvider(record, account, machine) {
   var result = copy(record || {})
   result.providerId = record.id
   result.providerName = record.name || record.id
@@ -45,6 +45,20 @@ function remoteProvider(record, account) {
   result.usageIncomplete = coverage.incomplete
   result.oldestStaleSuccess = coverage.oldest
   result.unavailableWithoutSuccess = coverage.unavailableWithoutSuccess
+  if (machine && (machine.status === "stale" || machine.status === "unavailable")) {
+    result.usageIncomplete = true
+    var success = Number(machine.lastSuccess || 0)
+    if (success > 0)
+      result.oldestStaleSuccess = coverage.oldest > 0 ? Math.min(coverage.oldest, success) : success
+    else result.unavailableWithoutSuccess = true
+    // Change only the prepared view. Retain dated buckets and last-good
+    // counters, but never verify padded days from a failed machine refresh.
+    result.dailyUsage = copy(result.dailyUsage || {})
+    result.dailyUsage.complete = false
+    result.dailyUsage.issues = (result.dailyUsage.issues || []).concat([
+      "Remote machine refresh failed; last known usage retained"
+    ])
+  }
   return result
 }
 
@@ -152,6 +166,7 @@ function sum(providers, account, nowMs) {
 
 function scopes(local, machines, nowMs) {
   var accounts = {}, ids = [], all = {}, result = { local: local }, seen = {}, missing = {}
+  var failed = {}
   for (var i = 0; i < local.length; i++) {
     var p = local[i]
     accounts[p.providerId] = p
@@ -169,22 +184,28 @@ function scopes(local, machines, nowMs) {
         ids.push(id)
         all[id] = []
       }
-      var remote = remoteProvider(records[id], accounts[id])
+      var remote = remoteProvider(records[id], accounts[id], machine)
       view.push(remote)
       all[id].push(remote)
     }
     result[machine.id] = view
     missing[machine.id] = !machine.lastSuccess
+    if (machine.status === "stale" || machine.status === "unavailable") failed[machine.id] = machine
   }
   // A computer with no completed import contributes an unknown value to every
-  // supported provider in All; it must not silently disappear as zero.
+  // supported provider in All. After a failed refresh, a provider absent from
+  // its last snapshot is also unknown; neither case can disappear as zero.
   for (var missingScope in missing) {
-    if (!missing[missingScope]) continue
+    if (!missing[missingScope] && !failed[missingScope]) continue
     for (var missingIdIndex = 0; missingIdIndex < ids.length; missingIdIndex++) {
       var missingId = ids[missingIdIndex]
       if (["codex", "claude", "kimi"].indexOf(missingId) < 0) continue
+      if (!missing[missingScope] && result[missingScope].some(function(provider) {
+        return provider.providerId === missingId
+      })) continue
       all[missingId].push({ id: missingId, name: accounts[missingId].providerName,
-        knownUsage: false, usageIncomplete: true, unavailableWithoutSuccess: true })
+        knownUsage: false, usageIncomplete: true, unavailableWithoutSuccess: missing[missingScope],
+        oldestStaleSuccess: Number((failed[missingScope] || {}).lastSuccess || 0) })
     }
   }
   result.all = ids.map(function(id) {
@@ -198,12 +219,13 @@ function scopes(local, machines, nowMs) {
     for (var j = 0; j < result[scope].length; j++) lookup[result[scope][j].providerId] = result[scope][j]
     result[scope] = ids.map(function(id) {
       var value = lookup[id] || sum([], accounts[id], nowMs)
-      if (missing[scope]) {
+      if (missing[scope] || (failed[scope] && !lookup[id])) {
         value = copy(value)
         value.remoteMissing = true
         value.knownUsage = false
         value.usageIncomplete = true
-        value.unavailableWithoutSuccess = true
+        value.unavailableWithoutSuccess = missing[scope]
+        value.oldestStaleSuccess = Number((failed[scope] || {}).lastSuccess || 0)
         value.todayTotalTokens = null
         value.recentDays = []
         value.dailyUsage = copy(value.dailyUsage)
