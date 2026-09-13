@@ -94,6 +94,26 @@ const emptyResult = pricing.buildModelWindowPresentation('codex', emptyUsage, no
 assertEqual(emptyResult.available + '/' + emptyResult.models.length, 'true/0',
   'a legitimate empty native 30-day view stays empty instead of falling back to all-time data')
 
+const fableBucket = bucket('claude-fable-5-1', {
+  inputTokens: 1000000, outputTokens: 1000000,
+  cacheReadInputTokens: 1000000, cacheCreationInputTokens: 1000000
+}, 4000000)
+fableBucket.source = 'claude-native'
+fableBucket.tariff = { service_tier: 'standard', speed: 'standard', inference_geo: 'not_available',
+  cache_duration: 'mixed-5m-1h', cache_creation: {
+    ephemeral_5m_input_tokens: 500000, ephemeral_1h_input_tokens: 500000 } }
+const fableUsage = { ...emptyUsage,
+  days: [{ date: '2026-09-30', buckets: [fableBucket] }] }
+const fablePresentation = pricing.buildModelWindowPresentation('claude', fableUsage, now, {}, true)
+const fableModel = fablePresentation.models[0]
+assertEqual(fableModel.id + '/' + fableModel.tokens + '/' + fableModel.value,
+  'claude-fable-5-1/4000000/4.0M/$76.50',
+  'Fable 5.1 keeps measured tokens visible while pricing every verified standard category')
+assert(fableModel.cost.status === 'complete'
+  && fableModel.tooltip.includes('full 1M context window')
+  && fableModel.tooltip.includes('does not claim global routing'),
+  'Fable 5.1 exposes full-context applicability and unavailable geography as estimate limits')
+
 function qmlSequence(values) {
   const sequence = { length: values.length }
   values.forEach((value, index) => { sequence[index] = value })

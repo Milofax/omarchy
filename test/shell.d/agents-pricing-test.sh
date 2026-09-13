@@ -34,6 +34,19 @@ assertDeepEqual(claudeOpus.rates, { input: 5, output: 25, cacheRead: 0.5, cacheW
 assertEqual(claudeOpus.priceAsOf + '/' + claudeOpus.source.url,
   '2026-09-10/https://platform.claude.com/docs/en/about-claude/pricing',
   'Claude bundled pricing retains its primary provenance and price date')
+const claudeFable = pricing.resolveRate('claude', 'claude-fable-5-1', {})
+assertDeepEqual(claudeFable.rates,
+  { input: 10, output: 50, cacheRead: 0.25, cacheWrite: 12.5, cacheWrite1h: 20 },
+  'Claude Fable 5.1 uses its exact independently recorded standard tariff')
+assertEqual(claudeFable.priceAsOf + '/' + claudeFable.source.url,
+  '2026-09-13/https://platform.claude.com/docs/en/models/fable-5-1/overview',
+  'Claude Fable 5.1 exposes its model-specific primary provenance and price date')
+assertEqual(claudeFable.tariff, 'standard',
+  'Claude Fable 5.1 does not mislabel its full-context standard rate as short-context-only')
+assert(claudeFable.assumptions.join(' ').includes('full 1M context window'),
+  'Claude Fable 5.1 discloses the verified full-context applicability of its standard rate')
+assertEqual(pricing.resolveRate('claude', 'claude-fable-5-1-preview', {}), null,
+  'an unproven Fable suffix does not inherit the exact Fable 5.1 tariff')
 assertDeepEqual(pricing.resolveRate('claude', 'claude-sonnet-5', {}).rates,
   { input: 2, output: 10, cacheRead: 0.2, cacheWrite: 2.5, cacheWrite1h: 4 },
   'Claude Sonnet 5 retains the confirmed standard price after the cancelled increase')

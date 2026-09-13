@@ -41,6 +41,14 @@ var ANTHROPIC_PRICING_SOURCE = {
   sha256: "6f077b5dfa21aec36b69f97dd2cd7d9d35c94ecd037104a9af585c619fc7fdf8"
 }
 
+var FABLE_5_1_SOURCE = {
+  name: "Claude Fable 5.1 model pricing",
+  url: "https://platform.claude.com/docs/en/models/fable-5-1/overview",
+  retrievedAt: "2026-09-13T12:31:03Z",
+  priceAsOf: "2026-09-13",
+  sha256: "730ee6d4b39d4d3d894bf3936dc7b45d3edc313ba570b5863601588e745e9b54"
+}
+
 function publishedRate(input, output, cacheRead, cacheWrite, source) {
   return {
     rates: { input: input, output: output, cacheRead: cacheRead, cacheWrite: cacheWrite },
@@ -51,9 +59,16 @@ function publishedRate(input, output, cacheRead, cacheWrite, source) {
   }
 }
 
-function publishedClaudeRate(input, output, cacheRead, cacheWrite5m, cacheWrite1h) {
-  var entry = publishedRate(input, output, cacheRead, cacheWrite5m, ANTHROPIC_PRICING_SOURCE)
+function publishedClaudeRate(input, output, cacheRead, cacheWrite5m, cacheWrite1h, source) {
+  var entry = publishedRate(input, output, cacheRead, cacheWrite5m, source || ANTHROPIC_PRICING_SOURCE)
   entry.rates.cacheWrite1h = cacheWrite1h
+  return entry
+}
+
+function publishedFable51Rate() {
+  var entry = publishedClaudeRate(10, 50, 0.25, 12.5, 20, FABLE_5_1_SOURCE)
+  entry.tariff = "standard"
+  entry.assumptions = ["Standard tariff estimate; Claude Fable 5.1 includes the full 1M context window at standard pricing"]
   return entry
 }
 
@@ -90,6 +105,7 @@ var BUNDLED_CODEX_ALIASES = {
 }
 
 var BUNDLED_CLAUDE_MODELS = {
+  "claude-fable-5-1": publishedFable51Rate(),
   "claude-opus-5": publishedClaudeRate(5, 25, 0.5, 6.25, 10),
   "claude-opus-4-6": publishedClaudeRate(5, 25, 0.5, 6.25, 10),
   "claude-opus-4-7": publishedClaudeRate(5, 25, 0.5, 6.25, 10),
@@ -109,7 +125,7 @@ var BUNDLED_CATALOG = {
   currency: "USD",
   denominator: 1000000,
   unit: "tokens",
-  bundledAt: "2026-09-09",
+  bundledAt: "2026-09-13",
   providers: {
     codex: {
       source: OPENAI_PRICING_SOURCE,
@@ -236,9 +252,9 @@ function bundledRate(providerId, id) {
     origin: "bundled-fallback",
     priceAsOf: entry.source.priceAsOf,
     source: clone(entry.source),
-    assumptions: [providerId === "claude"
+    assumptions: clone(entry.assumptions || [providerId === "claude"
       ? "Standard short-context tariff estimate"
-      : "Standard short-context tariff estimate; request-level input size is not retained in daily aggregation"]
+      : "Standard short-context tariff estimate; request-level input size is not retained in daily aggregation"])
   }
 }
 
