@@ -6,6 +6,15 @@ function copy(value) {
   return result
 }
 
+function dateKey(date) {
+  return date.getFullYear() + "-" + ("0" + (date.getMonth() + 1)).slice(-2) + "-" + ("0" + date.getDate()).slice(-2)
+}
+
+function coversDay(daily, date) {
+  return daily && typeof daily.throughDate === "string" && daily.throughDate >= date
+    && (daily.days || []).some(function(day) { return day.date === date })
+}
+
 function providerCoverage(record) {
   record = record || {}
   var metadata = false, incomplete = false, oldest = 0, unavailableWithoutSuccess = false
@@ -30,7 +39,7 @@ function providerCoverage(record) {
     unavailableWithoutSuccess: unavailableWithoutSuccess }
 }
 
-function remoteProvider(record, account, machine) {
+function remoteProvider(record, account, machine, todayKey) {
   var result = copy(record || {})
   result.providerId = record.id
   result.providerName = record.name || record.id
@@ -59,15 +68,20 @@ function remoteProvider(record, account, machine) {
       "Remote machine refresh failed; last known usage retained"
     ])
   }
+  if (todayKey && !coversDay(result.dailyUsage, todayKey)) {
+    result.usageIncomplete = true
+    result.dailyUsage = copy(result.dailyUsage || {})
+    result.dailyUsage.complete = false
+    result.dailyUsage.issues = (result.dailyUsage.issues || []).concat([
+      "No verified usage coverage for " + todayKey
+    ])
+  }
   return result
 }
 
 function sum(providers, account, nowMs) {
   var result = remoteProvider({ id: account.providerId, name: account.providerName }, account)
   var today = new Date(nowMs)
-  function dateKey(date) {
-    return date.getFullYear() + "-" + ("0" + (date.getMonth() + 1)).slice(-2) + "-" + ("0" + date.getDate()).slice(-2)
-  }
   var todayKey = dateKey(today)
   var days = {}, recent = {}, models = {}, modelToday = {}, issues = [], active = {}
   for (var offset = 29; offset >= 0; offset--) {
@@ -112,6 +126,13 @@ function sum(providers, account, nowMs) {
       continue
     }
     complete = complete && daily.complete === true
+    // A successful earlier import (or an ongoing import) cannot verify a
+    // day beyond its dated record, even when the machine is still current.
+    if (!coversDay(daily, todayKey)) {
+      usageIncomplete = true
+      var issue = "No verified usage coverage for " + todayKey
+      if (issues.indexOf(issue) < 0) issues.push(issue)
+    }
     unallocated += Number(daily.unallocatedTokens || 0)
     var sourceIssues = daily.issues || []
     for (var si = 0; si < sourceIssues.length; si++)
@@ -166,7 +187,7 @@ function sum(providers, account, nowMs) {
 
 function scopes(local, machines, nowMs) {
   var accounts = {}, ids = [], all = {}, result = { local: local }, seen = {}, missing = {}
-  var failed = {}
+  var unverified = {}, todayKey = dateKey(new Date(nowMs))
   for (var i = 0; i < local.length; i++) {
     var p = local[i]
     accounts[p.providerId] = p
@@ -184,19 +205,23 @@ function scopes(local, machines, nowMs) {
         ids.push(id)
         all[id] = []
       }
-      var remote = remoteProvider(records[id], accounts[id], machine)
+      var remote = remoteProvider(records[id], accounts[id], machine, todayKey)
       view.push(remote)
       all[id].push(remote)
     }
     result[machine.id] = view
     missing[machine.id] = !machine.lastSuccess
-    if (machine.status === "stale" || machine.status === "unavailable") failed[machine.id] = machine
+    // For a provider absent from the snapshot, lastSuccess dates the most
+    // recent verified absence. It cannot establish absence on a newer day.
+    if (machine.status === "stale" || machine.status === "unavailable"
+        || (machine.lastSuccess && dateKey(new Date(machine.lastSuccess * 1000)) < todayKey))
+      unverified[machine.id] = machine
   }
   // A computer with no completed import contributes an unknown value to every
-  // supported provider in All. After a failed refresh, a provider absent from
-  // its last snapshot is also unknown; neither case can disappear as zero.
+  // supported provider in All. A provider absent from an unverified snapshot
+  // is also unknown; neither case can disappear as zero.
   for (var missingScope in missing) {
-    if (!missing[missingScope] && !failed[missingScope]) continue
+    if (!missing[missingScope] && !unverified[missingScope]) continue
     for (var missingIdIndex = 0; missingIdIndex < ids.length; missingIdIndex++) {
       var missingId = ids[missingIdIndex]
       if (["codex", "claude", "kimi"].indexOf(missingId) < 0) continue
@@ -205,7 +230,7 @@ function scopes(local, machines, nowMs) {
       })) continue
       all[missingId].push({ id: missingId, name: accounts[missingId].providerName,
         knownUsage: false, usageIncomplete: true, unavailableWithoutSuccess: missing[missingScope],
-        oldestStaleSuccess: Number((failed[missingScope] || {}).lastSuccess || 0) })
+        oldestStaleSuccess: Number((unverified[missingScope] || {}).lastSuccess || 0) })
     }
   }
   result.all = ids.map(function(id) {
@@ -219,13 +244,13 @@ function scopes(local, machines, nowMs) {
     for (var j = 0; j < result[scope].length; j++) lookup[result[scope][j].providerId] = result[scope][j]
     result[scope] = ids.map(function(id) {
       var value = lookup[id] || sum([], accounts[id], nowMs)
-      if (missing[scope] || (failed[scope] && !lookup[id])) {
+      if (missing[scope] || (unverified[scope] && !lookup[id])) {
         value = copy(value)
         value.remoteMissing = true
         value.knownUsage = false
         value.usageIncomplete = true
         value.unavailableWithoutSuccess = missing[scope]
-        value.oldestStaleSuccess = Number((failed[scope] || {}).lastSuccess || 0)
+        value.oldestStaleSuccess = Number((unverified[scope] || {}).lastSuccess || 0)
         value.todayTotalTokens = null
         value.recentDays = []
         value.dailyUsage = copy(value.dailyUsage)

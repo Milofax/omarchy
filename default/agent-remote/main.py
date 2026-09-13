@@ -7,7 +7,6 @@ import json
 import os
 from pathlib import Path
 import sys
-import subprocess
 import time
 import uuid
 
@@ -198,9 +197,6 @@ def main(argv=None):
       else:
         for row in summary:
           print('\t'.join(str(row.get(key) or '-') for key in ('id', 'label', 'target', 'user', 'platform', 'status', 'lastSuccess')))
-  except subprocess.SubprocessError:
-    print("SSH identity check failed; verify normal SSH access first", file=sys.stderr)
-    return 1
   except (TransportError, OSError, ValueError, KeyError) as error:
     print(str(error), file=sys.stderr)
     return 1

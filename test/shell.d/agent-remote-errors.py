@@ -32,24 +32,36 @@ time.sleep(30)
     self.environment.stop()
     self.temp.cleanup()
 
-  def test_agent_refusal_before_sftp_handshake_is_not_reported_as_timeout(self):
+  def test_pre_handshake_timeout_retains_refusal_as_secondary_context(self):
     with self.assertRaises(TransportError) as caught:
-      with Sftp('fixture-alias', timeout=0.5):
-        self.fail('An SSH signing refusal cannot establish an SFTP session')
-    self.assertIn('SSH agent refused signing', str(caught.exception))
+      with Sftp('fixture-alias', timeout=5):
+        self.fail('The stalled fixture must not establish an SFTP session')
+    self.assertTrue(str(caught.exception).startswith('SSH transfer timed out'))
+    self.assertIn('agent signing refusal was reported during this attempt (failure cause unconfirmed)', str(caught.exception))
     self.assertNotIn('private fixture key', str(caught.exception))
 
-  def test_agent_refusal_with_process_exit_retains_specific_diagnostic(self):
+  def test_pre_handshake_exit_retains_refusal_as_secondary_context(self):
     self.ssh.write_text(self.ssh.read_text().replace('time.sleep(30)', 'sys.exit(255)'))
     with self.assertRaises(TransportError) as caught:
-      Sftp('fixture-alias', timeout=0.5)
-    self.assertIn('SSH agent refused signing', str(caught.exception))
+      Sftp('fixture-alias', timeout=5)
+    self.assertIn('agent signing refusal was reported during this attempt (failure cause unconfirmed)', str(caught.exception))
 
   def test_silent_stall_remains_a_timeout(self):
     self.ssh.write_text('#!' + sys.executable + '\nimport time\ntime.sleep(30)\n')
     with self.assertRaises(TransportError) as caught:
-      Sftp('fixture-alias', timeout=0.5)
+      Sftp('fixture-alias', timeout=5)
     self.assertIn('SSH transfer timed out', str(caught.exception))
+
+  def test_subsystem_failure_after_key_refusal_keeps_primary_connection_error(self):
+    self.ssh.write_text(self.ssh.read_text().replace('time.sleep(30)', '''
+sys.stderr.write('subsystem request failed on channel 0\\n')
+sys.exit(255)
+'''))
+    with self.assertRaises(TransportError) as caught:
+      Sftp('fixture-alias', timeout=5)
+    self.assertTrue(str(caught.exception).startswith('SSH/SFTP unavailable'))
+    self.assertIn('failure cause unconfirmed', str(caught.exception))
+    self.assertNotIn('private fixture key', str(caught.exception))
 
   def test_unknown_ssh_failure_does_not_publish_private_diagnostics(self):
     self.ssh.write_text('#!' + sys.executable + '\n' + '''
@@ -58,7 +70,7 @@ sys.stderr.write('private fixture key: unrelated connection failure\\n')
 sys.exit(255)
 ''')
     with self.assertRaises(TransportError) as caught:
-      Sftp('fixture-alias', timeout=0.5)
+      Sftp('fixture-alias', timeout=5)
     self.assertIn('SSH/SFTP unavailable', str(caught.exception))
     self.assertNotIn('private fixture key', str(caught.exception))
 
@@ -72,16 +84,16 @@ time.sleep(30)
 
   def test_successful_handshake_is_not_rejected_for_an_earlier_key_refusal(self):
     self.successful_handshake_after_refusal()
-    with Sftp('fixture-alias', timeout=2):
+    with Sftp('fixture-alias', timeout=5):
       pass
 
   def test_transfer_timeout_after_success_does_not_reuse_an_earlier_key_refusal(self):
     self.successful_handshake_after_refusal()
-    with Sftp('fixture-alias', timeout=0.5) as remote:
+    with Sftp('fixture-alias', timeout=5) as remote:
       with self.assertRaises(TransportError) as caught:
         remote.realpath('.')
     self.assertIn('SSH transfer timed out', str(caught.exception))
-    self.assertNotIn('SSH agent refused signing', str(caught.exception))
+    self.assertNotIn('signing refusal', str(caught.exception))
 
   def identity_refusal(self):
     self.ssh.write_text('#!' + sys.executable + '\n' + '''
@@ -95,13 +107,57 @@ else:
   sys.exit(255)
 ''')
 
-  def test_identity_connection_reports_its_own_agent_refusal(self):
+  def test_identity_255_retains_refusal_as_secondary_context(self):
     self.identity_refusal()
-    with Sftp('fixture-alias', timeout=2) as remote:
+    with Sftp('fixture-alias', timeout=5) as remote:
       with self.assertRaises(TransportError) as caught:
         remote.identity()
-    self.assertIn('SSH agent refused signing', str(caught.exception))
+    self.assertIn('agent signing refusal was reported during this attempt (failure cause unconfirmed)', str(caught.exception))
     self.assertNotIn('private fixture key', str(caught.exception))
+
+  def test_identity_remote_command_failure_after_key_refusal_has_no_auth_cause(self):
+    for returncode in (1, 127, 255):
+      with self.subTest(returncode=returncode):
+        self.identity_refusal()
+        self.ssh.write_text(self.ssh.read_text().replace('  sys.exit(255)', '''
+  # A command started after another key authenticated successfully. Its
+  # exit 255 is indistinguishable from an SSH failure at this boundary.
+  sys.stdout.write('Linux\\n501\\nfixture-user\\n')
+  sys.exit(''' + str(returncode) + ')'))
+        with Sftp('fixture-alias', timeout=5) as remote:
+          with self.assertRaises(TransportError) as caught:
+            remote.identity()
+        self.assertEqual(str(caught.exception),
+                         'SSH identity check failed' + ('; an agent signing refusal was reported during this attempt (failure cause unconfirmed)' if returncode == 255 else ''))
+
+  def test_identity_remote_command_timeout_after_key_refusal_has_no_auth_cause(self):
+    self.identity_refusal()
+    self.ssh.write_text(self.ssh.read_text().replace('  sys.exit(255)', '''
+  sys.stdout.write('Linux\\n501\\nfixture-user\\n')
+  sys.stdout.flush()
+  time.sleep(30)
+'''))
+    with Sftp('fixture-alias', timeout=5) as remote:
+      with self.assertRaises(TransportError) as caught:
+        remote.identity()
+    self.assertEqual(str(caught.exception),
+                     'SSH identity check timed out')
+
+  def test_cli_add_identity_failure_does_not_claim_a_retained_snapshot(self):
+    self.identity_refusal()
+    env = dict(os.environ, HOME=str(self.root / 'home'), XDG_CONFIG_HOME=str(self.root / 'config'),
+               XDG_STATE_HOME=str(self.root / 'state'), XDG_CACHE_HOME=str(self.root / 'cache'),
+               OMARCHY_PATH=str(ROOT), PYTHONDONTWRITEBYTECODE='1')
+    added = subprocess.run([str(ROOT / 'bin/omarchy-agent-machine'), 'add', 'fixture-alias'],
+                           env=env, capture_output=True, text=True, timeout=10)
+    self.assertEqual(added.returncode, 1)
+    self.assertEqual(added.stdout, '')
+    self.assertTrue(added.stderr.startswith('SSH identity check failed'))
+    self.assertIn('failure cause unconfirmed', added.stderr)
+    self.assertNotIn('retained', added.stderr)
+    self.assertNotIn('private fixture key', added.stderr)
+    self.assertFalse((self.root / 'config/omarchy/agents/machines.json').exists())
+    self.assertFalse((self.root / 'state/omarchy/agents/remote/state.json').exists())
 
   def assert_cli_failure(self, established):
     config = self.root / 'config/omarchy/agents'
@@ -124,14 +180,14 @@ else:
                XDG_STATE_HOME=str(self.root / 'state'), XDG_CACHE_HOME=str(self.root / 'cache'),
                OMARCHY_PATH=str(ROOT), PYTHONDONTWRITEBYTECODE='1')
     refreshed = subprocess.run([str(ROOT / 'bin/omarchy-agent-machine'), 'refresh', '--force'],
-                               env=env, capture_output=True, text=True, timeout=5)
+                               env=env, capture_output=True, text=True, timeout=10)
     self.assertEqual(refreshed.returncode, 0, 'A completed sweep preserves the partial-success exit contract')
     row = json.loads((state / 'state.json').read_text())['machines'][0]
     self.assertEqual(row['status'], 'stale' if established else 'unavailable')
     self.assertEqual(row.get('lastSuccess'), 1234 if established else None)
     self.assertEqual(row.get('providers'), providers if established else None)
     self.assertEqual(result.read_bytes() if result.exists() else None, before)
-    self.assertIn('SSH agent refused signing', row['error'])
+    self.assertIn('agent signing refusal was reported during this attempt (failure cause unconfirmed)', row['error'])
     self.assertNotIn('private fixture key', json.dumps(row))
 
   def test_cli_sweep_retains_last_good_usage_and_publishes_attempt_failure(self):

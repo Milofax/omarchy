@@ -21,13 +21,13 @@ class TransportError(Exception):
   """The session is unusable; never handle this as a source-local OSError."""
 
 
-def ssh_failure(errors, fallback):
+def ssh_failure_message(errors, fallback):
   # Inspect only a bounded tail without seeking the child's shared file offset.
   # Never publish stderr: SSH diagnostics can include private paths/key labels.
   size = os.fstat(errors.fileno()).st_size
   diagnostic = os.pread(errors.fileno(), 16384, max(0, size - 16384)).lower()
   if b'signing failed' in diagnostic and b'agent refused operation' in diagnostic:
-    return 'SSH agent refused signing for this connection attempt; the last successful usage is retained'
+    return fallback + '; an agent signing refusal was reported during this attempt (failure cause unconfirmed)'
   return fallback
 
 
@@ -135,13 +135,13 @@ class Sftp:
     # SSH may try another key successfully after a refusal. Once SFTP is
     # established, that earlier diagnostic cannot explain a transfer failure.
     if not self.established:
-      message = ssh_failure(self.errors, message)
+      message = ssh_failure_message(self.errors, message)
     return TransportError(message)
 
   def check_deadline(self):
     remaining = self.deadline - time.monotonic()
     if remaining <= 0:
-      raise self.connection_error('SSH transfer timed out; the last successful usage is retained')
+      raise self.connection_error('SSH transfer timed out')
     return remaining
 
   def read_exact(self, count):
@@ -151,10 +151,10 @@ class Sftp:
       try:
         ready = select.select([self.process.stdout], [], [], timeout)[0]
         if not ready:
-          raise self.connection_error('SSH transfer timed out; the last successful usage is retained')
+          raise self.connection_error('SSH transfer timed out')
         block = os.read(self.process.stdout.fileno(), count - len(result))
       except OSError as error:
-        raise self.connection_error('SSH/SFTP stream read failed; the last successful usage is retained') from error
+        raise self.connection_error('SSH/SFTP stream read failed') from error
       if not block:
         raise self.connection_error('SSH/SFTP unavailable; check SSH access and the trusted host key in a terminal')
       result.extend(block)
@@ -167,7 +167,7 @@ class Sftp:
       try:
         written = self.process.stdin.write(pending)
       except OSError as error:
-        raise self.connection_error('SSH/SFTP stream write failed; the last successful usage is retained') from error
+        raise self.connection_error('SSH/SFTP stream write failed') from error
       if not written:
         raise self.connection_error('SSH transport closed')
       pending = pending[written:]
@@ -315,9 +315,14 @@ class Sftp:
         result = subprocess.run(ssh_command(self.target) + [IDENTITY_COMMAND],
                                 stdout=subprocess.PIPE, stderr=errors, timeout=15, check=True)
       except subprocess.TimeoutExpired as error:
-        raise TransportError(ssh_failure(errors, 'SSH identity check timed out; the last successful usage is retained')) from error
+        raise TransportError('SSH identity check timed out') from error
       except subprocess.CalledProcessError as error:
-        raise TransportError(ssh_failure(errors, 'SSH identity check failed; the last successful usage is retained')) from error
+        message = 'SSH identity check failed'
+        # Exit 255 may be SSH's failure or the remote command's own status.
+        # Report a refusal only as observed context, never as the cause.
+        if error.returncode == 255:
+          message = ssh_failure_message(errors, message)
+        raise TransportError(message) from error
     parts = result.stdout.decode('utf-8').splitlines()
     if len(parts) < 5:
       raise OSError('Cannot establish the Linux/macOS machine and SSH user identity')

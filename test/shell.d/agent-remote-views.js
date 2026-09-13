@@ -134,6 +134,64 @@ assert.equal(absentViews.stale[0].todayTotalTokens, null)
 assert.equal(absentViews.stale[0].knownUsage, false)
 console.log('ok - stale-machine day rollover keeps unknown coverage and positive last-good subtotals')
 
+const rolloverStatuses = ['current', 'incomplete', 'importing', 'stale', 'unavailable']
+const rolloverCosts = []
+for (const status of rolloverStatuses) {
+  const machine = { id: 'rollover', identity: 'rollover-device', status,
+    lastSuccess: new Date(2026, 8, 12, 23, 30).getTime() / 1000, providers: { codex: record(25) } }
+  const original = JSON.stringify(machine)
+  const views = remote.scopes([], [machine], rolloverTime)
+  const values = [views.all[0], views.rollover[0]].map(provider => {
+    const rows = pricing.buildDailyRows('codex', provider.dailyUsage, provider.recentDays,
+      rolloverTime, pricing.parseOverrides(''), true)
+    return [rows.at(-1).value, rows.at(-1).cost.status]
+  })
+  rolloverCosts.push([status, ...values])
+  assert.equal(views.all[0].modelUsage['gpt-6-astra'].inputTokens, 25)
+  assert.equal(JSON.stringify(machine), original, 'Rollover must not mutate a last-good provider')
+}
+assert.deepEqual(rolloverCosts, rolloverStatuses.map(status => [status, ['0/—', 'unknown'], ['0/—', 'unknown']]),
+  'Every machine status needs dated current-day coverage in both All and the individual view')
+console.log('ok - all statuses preserve new-day pricing uncertainty in All and individual views')
+
+const freshLocal = JSON.parse(JSON.stringify(local))
+freshLocal.dailyUsage.throughDate = '2026-09-13'
+freshLocal.dailyUsage.days[0].date = '2026-09-13'
+for (const status of rolloverStatuses) {
+  const machine = { id: 'rollover', identity: 'rollover-device', status,
+    lastSuccess: new Date(2026, 8, 12, 23, 30).getTime() / 1000, providers: { codex: record(25) } }
+  const mixed = remote.scopes([freshLocal], [machine], rolloverTime)
+  const today = pricing.buildDailyRows('codex', mixed.all[0].dailyUsage, mixed.all[0].recentDays,
+    rolloverTime, pricing.parseOverrides(''), true).at(-1)
+  assert.equal(mixed.all[0].todayTotalTokens, 100)
+  assert.equal(mixed.all[0].modelUsage['gpt-6-astra'].inputTokens, 125)
+  assert.equal(today.cost.status, 'partial', 'Known local tokens remain a priced subtotal')
+  const absent = remote.scopes([freshLocal], [{ ...machine, providers: {} }], rolloverTime)
+  assert.equal(absent.all[0].todayTotalTokens, 100)
+  assert.equal(absent.all[0].usageIncomplete, true, status + ': yesterday absence cannot verify today zero')
+  const single = pricing.buildDailyRows('codex', absent.rollover[0].dailyUsage, absent.rollover[0].recentDays,
+    rolloverTime, pricing.parseOverrides(''), true).at(-1)
+  assert.equal(single.value, '0/—')
+}
+const verifiedDay = record(25)
+verifiedDay.dailyUsage.throughDate = '2026-09-13'
+verifiedDay.dailyUsage.days.push({ date: '2026-09-13', buckets: [] })
+const verifiedViews = remote.scopes([], [{ id: 'verified', identity: 'verified-device', status: 'current',
+  lastSuccess: rolloverTime / 1000, providers: { codex: verifiedDay } }], rolloverTime)
+for (const provider of [verifiedViews.all[0], verifiedViews.verified[0]]) {
+  const today = pricing.buildDailyRows('codex', provider.dailyUsage, provider.recentDays,
+    rolloverTime, pricing.parseOverrides(''), true).at(-1)
+  assert.equal(today.value, '0/$0.00', 'New verified coverage can establish a genuine zero')
+  assert.equal(today.cost.status, 'complete')
+  assert.equal(provider.usageIncomplete, false)
+}
+assert.equal(verifiedViews.all[0].modelUsage['gpt-6-astra'].inputTokens, 25)
+const rolloverCache = pricing.createPresentationCache()
+pricing.preparePresentationCache(rolloverCache, [verifiedViews.all[0], verifiedViews.verified[0]])
+const firstPresentation = pricing.cachedModelWindowPresentation(rolloverCache, verifiedViews.verified[0], rolloverTime, '', 0)
+assert.equal(pricing.cachedModelWindowPresentation(rolloverCache, verifiedViews.verified[0], rolloverTime, '', 0), firstPresentation)
+console.log('ok - rollover retains mixed subtotals, unknown absent providers, verified recovery and cached presentations')
+
 const cache = pricing.createPresentationCache()
 const views = Object.values(scopes)
 pricing.preparePresentationCache(cache, views.flat())
