@@ -53,7 +53,7 @@ assert(/function providerSupportsPricing\(value\)/.test(panelSource)
   && /value\.providerId === "codex" \|\| value\.providerId === "claude" \|\| value\.providerId === "kimi"/.test(panelSource)
   && /readonly property var days: root\.providerSupportsPricing\(page\.provider\)/.test(panelSource),
   'Claude, Codex, and Kimi share the pricing-backed day, model, heading, and limitation gates')
-assert(/TOKENS \/ KNOWN API COST EST\. BY MODEL \(30 DAYS\)/.test(panelSource)
+assert(/TOKENS \/ KNOWN API COST EST\. BY MODEL"/.test(panelSource)
   && /Costs exclude usage with missing prices or token details\./.test(panelSource)
   && !/known API-cost subtotal/.test(panelSource),
   'Codex cost sections explain incomplete known costs without a star legend')

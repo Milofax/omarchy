@@ -1012,7 +1012,7 @@ Panel {
         width: parent.width
         text: root.providerSupportsPricing(page.provider)
           && page.modelPresentation.available === true
-          ? "TOKENS / KNOWN API COST EST. BY MODEL (30 DAYS)" : "TOKENS BY MODEL"
+          ? "TOKENS / KNOWN API COST EST. BY MODEL" : "TOKENS BY MODEL"
         foreground: root.foreground
         fontFamily: root.fontFamily
       }
