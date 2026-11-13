@@ -1112,6 +1112,15 @@ function cachedModelWindowPresentation(cache, provider, nowMs, overrides, revisi
   return cachedPresentation(cache, "models", provider, nowMs, overrides, revision)
 }
 
+function compactDailyUsage(dailyUsage) {
+  if (!validDailyUsage(dailyUsage)) return
+  var days = dailyUsage.days
+  for (var i = 0; i < days.length; i++) {
+    if (isPlainObject(days[i]) && Array.isArray(days[i].buckets))
+      days[i].buckets = compactPricingBuckets(days[i].buckets)
+  }
+}
+
 // The original record stays on disk. Only its equivalent compact presentation
 // crosses into QML, so parsing request histories never blocks the GUI thread.
 function parseDisplayRecord(content) {
@@ -1120,11 +1129,16 @@ function parseDisplayRecord(content) {
   // A legacy helper can embed its full scan cache here. Main reads the flat
   // display fields; this duplicate history must not cross the GUI boundary.
   delete record.stats
-  if (validDailyUsage(record.dailyUsage)) {
-    var days = record.dailyUsage.days
-    for (var i = 0; i < days.length; i++) {
-      if (isPlainObject(days[i]) && Array.isArray(days[i].buckets))
-        days[i].buckets = compactPricingBuckets(days[i].buckets)
+  compactDailyUsage(record.dailyUsage)
+  // The remote snapshot (agents/remote/state.json) nests one per-request
+  // history per machine and provider. Uncompacted, a busy remote machine sends
+  // tens of thousands of buckets to the GUI thread, where merging and pricing
+  // them froze the whole shell for 20-40 s on every refresh.
+  var machines = Array.isArray(record.machines) ? record.machines : []
+  for (var m = 0; m < machines.length; m++) {
+    var providers = isPlainObject(machines[m]) && isPlainObject(machines[m].providers) ? machines[m].providers : {}
+    for (var id in providers) {
+      if (isPlainObject(providers[id])) compactDailyUsage(providers[id].dailyUsage)
     }
   }
   return record

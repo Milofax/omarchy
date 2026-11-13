@@ -252,6 +252,19 @@ assertEqual(JSON.parse(displayInput).dailyUsage.days[0].buckets.length, 5,
   'display compaction leaves the original serialized usage unchanged')
 assertDeepEqual(displayRecord.recentDays, [{ date: '2026-09-30', tokens: 44 }],
   'display parsing preserves legacy token totals')
+const remoteInput = JSON.stringify({
+  schemaVersion: 1,
+  machines: [{ id: 'mini', label: 'Mac Mini', status: 'current',
+    providers: { claude: { name: 'Claude', dailyUsage: mixedUsage, todayTotalTokens: 44 }, kimi: { name: 'Kimi' } } }]
+})
+const remoteRecord = pricing.parseDisplayRecord(remoteInput)
+const remoteClaude = remoteRecord.machines[0].providers.claude
+assertEqual(remoteClaude.dailyUsage.days[0].buckets.length, 3,
+  'background parsing compacts every remote machine history before QML transfer')
+assertDeepEqual(pricing.buildModelWindowPresentation('claude', remoteClaude.dailyUsage, now, {}, true), mixedResult,
+  'remote compaction preserves every model and window presentation')
+assertDeepEqual([remoteRecord.machines[0].label, remoteClaude.todayTotalTokens, remoteRecord.machines[0].providers.kimi],
+  ['Mac Mini', 44, { name: 'Kimi' }], 'remote compaction keeps machine and provider fields')
 assertEqual(pricing.parseDisplayRecord('[]'), null, 'array-shaped usage records are rejected')
 assertDeepEqual(pricing.parseDisplayRecord('{"id":"codex","dailyUsage":{"schemaVersion":99}}').dailyUsage,
   {schemaVersion:99}, 'unknown usage versions retain their unavailable-data semantics')
