@@ -1148,7 +1148,7 @@ if (typeof WorkerScript !== "undefined" && typeof WorkerScript.sendMessage === "
   WorkerScript.onMessage = function(message) {
     var record = null
     try { record = parseDisplayRecord(message.chunks.join("")) } catch (error) {}
-    WorkerScript.sendMessage({ generation: message.generation, record: record })
+    WorkerScript.sendMessage({ key: message.key, generation: message.generation, record: record })
   }
 }
 

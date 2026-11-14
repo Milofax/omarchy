@@ -1,4 +1,5 @@
 import QtQuick
+import QtQml.WorkerScript
 import Quickshell
 import Quickshell.Io
 import "RemoteUsage.js" as RemoteUsage
@@ -54,6 +55,13 @@ Item {
     if (JSON.stringify(ids) !== JSON.stringify(agentIds)) agentIds = ids
   }
 
+  // One background parser serves every record below (see Agent.qml).
+  property alias recordParser: recordParser
+  WorkerScript {
+    id: recordParser
+    source: "ApiCost.js"
+  }
+
   Instantiator {
     id: agentInstantiator
     model: root.agentIds
@@ -61,6 +69,7 @@ Item {
     delegate: Agent {
       required property var modelData
       agentId: modelData
+      parser: recordParser
       path: root.usageDir + "/" + modelData + ".json"
       onRecordChanged: root.recordsChanged()
     }
@@ -301,6 +310,7 @@ Item {
   Agent {
     id: remoteRecord
     agentId: "remote"
+    parser: recordParser
     path: root.remoteStatePath
     onRecordChanged: {
       if (!record || record.schemaVersion !== 1 || !Array.isArray(record.machines)) return

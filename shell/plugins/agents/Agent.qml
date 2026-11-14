@@ -20,11 +20,17 @@ Item {
   property string pendingContent: ""
   property bool parserBusy: false
 
-  WorkerScript {
-    id: parser
-    source: "ApiCost.js"
-    onReadyChanged: root.dispatchParse()
-    onMessage: function(message) {
+  // Main owns one parser for all its records: every WorkerScript runs its own
+  // JavaScript engine, so a worker per record cost two dozen engines per bar.
+  // Replies carry the record key; each record takes only its own.
+  property WorkerScript parser: null
+  readonly property string parserKey: agentId + "\n" + path
+
+  Connections {
+    target: root.parser
+    function onReadyChanged() { root.dispatchParse() }
+    function onMessage(message) {
+      if (message.key !== root.parserKey) return
       root.parserBusy = false
       root.acceptParsedRecord(message.generation, message.record)
       root.dispatchParse()
@@ -55,7 +61,7 @@ Item {
   }
 
   function dispatchParse() {
-    if (!parser.ready || parserBusy || pendingGeneration === 0) return
+    if (!parser || !parser.ready || parserBusy || pendingGeneration === 0) return
     parserBusy = true
     // WorkerScript cannot transport one string of 16 Mi characters or more.
     // Keep each part below that limit; join and parse only in the worker.
@@ -63,7 +69,7 @@ Item {
     var chunks = []
     for (var offset = 0; offset < pendingContent.length; offset += chunkSize)
       chunks.push(pendingContent.slice(offset, offset + chunkSize))
-    parser.sendMessage({ generation: pendingGeneration, chunks: chunks })
+    parser.sendMessage({ key: parserKey, generation: pendingGeneration, chunks: chunks })
     pendingGeneration = 0
     pendingContent = ""
   }

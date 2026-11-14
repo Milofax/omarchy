@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "omarchy.agents",
   "name": "Agents",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "author": "Omarchy",
   "license": "MIT",
   "description": "Claude Code, Codex, and Fireworks usage, limits, and pace in a native Omarchy bar panel.",

@@ -7,7 +7,9 @@ Item {
   property var versions:[]
   Timer { interval:1; running:true; repeat:true; onTriggered:testRoot.ticks++ }
   COMPONENT
-  AgentUnderTest { id: subject; onRecordChanged: if(record) testRoot.versions.push(record.version) }
+  WorkerScript { id: sharedParser; source: "ApiCost.js" }
+  AgentUnderTest { id: subject; agentId: "codex"; parser: sharedParser; onRecordChanged: if(record) testRoot.versions.push(record.version) }
+  Component { id: agentFactory; AgentUnderTest { parser: sharedParser } }
   TestCase {
     name:"AsyncUsageRecord"; when:windowShown
     function raw(version, count) {
@@ -30,6 +32,21 @@ Item {
       compare(subject.record.id,"claude")
       compare(subject.record.version,21,"large records must actually update, not retain stale usage")
       compare(subject.record.stats,undefined,"duplicate history stays outside the display record")
+    }
+    function test_sharedParserRoutesReplies() {
+      // Fresh agents start at the same generation, so only the key tells
+      // their replies apart.
+      var codex=agentFactory.createObject(testRoot,{agentId:"codex"}), claude=agentFactory.createObject(testRoot,{agentId:"claude"})
+      var mine=JSON.parse(raw(30,2)), theirs=JSON.parse(raw(31,3))
+      theirs.id="claude"
+      codex.parse(JSON.stringify(mine))
+      claude.parse(JSON.stringify(theirs))
+      tryVerify(function(){return !codex.parserBusy && !claude.parserBusy && codex.record && claude.record},5000)
+      wait(100)
+      compare([codex.record.id, claude.record.id],["codex","claude"],"each agent takes only its own reply from the shared parser")
+      compare(codex.record.dailyUsage.days[0].buckets[0].totalTokens,2)
+      compare(claude.record.dailyUsage.days[0].buckets[0].totalTokens,3)
+      codex.destroy(); claude.destroy()
     }
     function test_backgroundAndFreshness() {
       var content=raw(1,12000), start=testRoot.ticks

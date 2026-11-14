@@ -7,10 +7,10 @@ Item {
   property bool opened: false
   property var trace: ({changes: 0})
   Main { id: usage }
-  Agent { id: codex; onRecordChanged: usage.recordsChanged() }
-  Agent { id: claude; onRecordChanged: usage.recordsChanged() }
-  Agent { id: kimi; onRecordChanged: usage.recordsChanged() }
-  Agent { id: fireworks; onRecordChanged: usage.recordsChanged() }
+  Agent { id: codex; agentId: "codex"; parser: usage.recordParser; onRecordChanged: usage.recordsChanged() }
+  Agent { id: claude; agentId: "claude"; parser: usage.recordParser; onRecordChanged: usage.recordsChanged() }
+  Agent { id: kimi; agentId: "kimi"; parser: usage.recordParser; onRecordChanged: usage.recordsChanged() }
+  Agent { id: fireworks; agentId: "fireworks"; parser: usage.recordParser; onRecordChanged: usage.recordsChanged() }
   Repeater {
     id: preparedPages
     model: usage.preparedProviderViews.length
@@ -53,6 +53,7 @@ Item {
       var until = Date.now() + 1000
       while (!(codex.record && claude.record && codex.record.todayTotalTokens === n && claude.record.todayTotalTokens === n) && Date.now() < until) wait(1)
       verify(codex.record && claude.record && codex.record.todayTotalTokens === n && claude.record.todayTotalTokens === n)
+      compare([codex.record.id, claude.record.id], ["codex", "claude"], "one shared parser returns each record to its own agent")
     }
     function setRecords(n, limit) {
       codex.parse(JSON.stringify(root.record("codex", n, limit)))
